@@ -220,7 +220,7 @@ def render_dashboard():
 
     draw.text((18, 125), "LÄMPÖTILA", font=label_font, fill=0)
     draw.text((155, 125), "KOSTEUS", font=label_font, fill=0)
-    draw.text((280, 125), "PAINE", font=label_font, fill=0)
+    draw.text((280, 125), "PAINE hPa", font=label_font, fill=0)
 
     if cosy:
         temperature = f"{cosy['temperature']:.1f} C"
@@ -233,8 +233,7 @@ def render_dashboard():
 
     draw.text((18, 145), temperature, font=title_font, fill=0)
     draw.text((155, 145), humidity, font=title_font, fill=0)
-    draw.text((280, 145), pressure, font=font, fill=0)
-    draw.text((280, 163), "hPa", font=time_font, fill=0)
+    draw.text((280, 145), pressure, font=title_font, fill=0)
 
     # OLOHUONE / DHT22: original rendering, only title changed.
     draw.rectangle((10, 190, 390, 295), outline=0)
