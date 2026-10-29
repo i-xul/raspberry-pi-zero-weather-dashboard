@@ -10,7 +10,7 @@ import os
 import socket
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -26,6 +26,7 @@ DHT22_STATE_FILE = Path(
 
 FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+COSY_BARO_STALE_AFTER = timedelta(minutes=15)
 
 DISPLAY_WIDTH = 400
 DISPLAY_HEIGHT = 300
@@ -145,6 +146,28 @@ def fetch_cosy_baro():
         return None, False
 
 
+def cosy_baro_status(cosy, api_ok):
+    if not api_ok or not cosy:
+        return "OFFLINE"
+
+    updated = cosy["updated"]
+
+    if updated.tzinfo is None or updated.utcoffset() is None:
+        logging.warning("COSY BARO timestamp has no timezone")
+        return "STALE"
+
+    age = datetime.now(timezone.utc) - updated.astimezone(timezone.utc)
+
+    if age < timedelta(0):
+        logging.warning("COSY BARO timestamp is in the future")
+        return "STALE"
+
+    if age >= COSY_BARO_STALE_AFTER:
+        return "STALE"
+
+    return "ONLINE"
+
+
 def draw_box(draw, xy, title, lines, font, title_font):
     x1, y1, x2, y2 = xy
     draw.rectangle(xy, outline=0)
@@ -213,7 +236,7 @@ def render_dashboard():
     draw.text((18, 100), "KEITTIÖ", font=title_font, fill=0)
     draw.text(
         (308, 103),
-        "ONLINE" if cosy_ok else "OFFLINE",
+        cosy_baro_status(cosy, cosy_ok),
         font=font,
         fill=0,
     )
