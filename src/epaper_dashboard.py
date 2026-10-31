@@ -17,11 +17,14 @@ from urllib.request import urlopen
 import requests
 from PIL import Image, ImageDraw, ImageFont
 
-COSY_BARO_URL = "http://192.0.2.10:8765/api/cosy-baro"
-DHT22_URL = "https://sensor.example.com/api/lab_temp"
+from dashboard_config import load_config
+
+CONFIG = load_config()
+COSY_BARO_URL = CONFIG["cosy_baro_url"]
+DHT22_URL = CONFIG["dht22_url"]
 
 DHT22_STATE_FILE = Path(
-    "/home/pi/waveshare_epaper/dht22_last_good.json"
+    CONFIG["dht22_cache_path"]
 )
 
 FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -311,7 +314,7 @@ def main():
         return
 
     # Import the existing working Waveshare driver only for display mode.
-    sys.path.append("/home/pi/waveshare_epaper/lib")
+    sys.path.append(CONFIG["waveshare_lib_path"])
     from waveshare_epd import epd4in2
 
     epd = epd4in2.EPD()

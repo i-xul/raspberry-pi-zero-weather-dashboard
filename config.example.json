@@ -1,0 +1,6 @@
+{
+  "cosy_baro_url": "http://192.0.2.10:8765/api/cosy-baro",
+  "dht22_url": "https://sensor.example.com/api/lab_temp",
+  "dht22_cache_path": "/home/pi/waveshare_epaper/dht22_last_good.json",
+  "waveshare_lib_path": "/home/pi/waveshare_epaper/lib"
+}

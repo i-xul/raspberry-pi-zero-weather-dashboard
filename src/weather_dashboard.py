@@ -5,7 +5,9 @@
 import json
 from urllib.request import urlopen
 
-API_URL = "http://192.0.2.10:8765/api/cosy-baro"
+from dashboard_config import load_config
+
+API_URL = load_config()["cosy_baro_url"]
 REQUEST_TIMEOUT = 10
 
 

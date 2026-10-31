@@ -1,4 +1,3 @@
-@'
 # Python cache
 __pycache__/
 *.py[cod]
@@ -10,7 +9,12 @@ venv/
 # Dashboard preview
 weather_dashboard_preview.png
 
-# Local environment files
+# Local configuration and environment files
 .env
 .env.*
-'@ | Set-Content -Encoding utf8 .gitignore
+config.local.json
+*.local.json
+
+# Local credentials
+*.pem
+*.key
