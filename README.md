@@ -146,7 +146,7 @@ The DHT22 section uses a separate HTTPS endpoint.
 | `STALE` | The request failed, but a previously saved valid measurement is available. |
 | `OFFLINE` | The request failed and no saved measurement is available. |
 
-The DHT22 status is based on request success and fallback availability, not a fixed measurement-age threshold.
+The DHT22 status is based on request success and fallback availability. Cached measurements must be less than 24 hours old, have valid numeric values, and contain a timezone-aware timestamp. Older or invalid cached measurements are discarded.
 
 The last successfully retrieved DHT22 values are stored locally at:
 

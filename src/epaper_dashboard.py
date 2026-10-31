@@ -30,6 +30,7 @@ DHT22_STATE_FILE = Path(
 FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 COSY_BARO_STALE_AFTER = timedelta(minutes=15)
+DHT22_CACHE_MAX_AGE = timedelta(hours=24)
 
 DISPLAY_WIDTH = 400
 DISPLAY_HEIGHT = 300
@@ -61,15 +62,39 @@ def ip_addr():
 
 
 def load_last_good():
+    """Return a valid DHT22 cache measurement younger than 24 hours."""
     try:
         data = json.loads(DHT22_STATE_FILE.read_text(encoding="utf-8"))
-        if all(
-            key in data for key in ("temperature", "humidity", "updated")
-        ):
-            return data
-    except (OSError, ValueError, TypeError):
-        pass
-    return None
+
+        if not isinstance(data, dict):
+            return None
+
+        temperature = float(data["temperature"])
+        humidity = float(data["humidity"])
+        updated = datetime.fromisoformat(data["updated"])
+
+        if not all(math.isfinite(v) for v in (temperature, humidity)):
+            return None
+
+        if not 0 <= humidity <= 100:
+            return None
+
+        if updated.tzinfo is None or updated.utcoffset() is None:
+            return None
+
+        age = datetime.now(timezone.utc) - updated.astimezone(timezone.utc)
+
+        if not timedelta(0) <= age < DHT22_CACHE_MAX_AGE:
+            return None
+
+        return {
+            "temperature": temperature,
+            "humidity": humidity,
+            "updated": data["updated"],
+        }
+
+    except (OSError, ValueError, TypeError, KeyError, OverflowError):
+        return None
 
 
 def save_last_good(data):
