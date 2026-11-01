@@ -10,8 +10,8 @@ The dashboard combines indoor environmental measurements from two sources with b
 - Living room temperature and humidity from a DHT22 sensor.
 - Raspberry Pi Zero W hostname, IP address, CPU temperature, and system load.
 - Automatic e-paper refreshes with a five-minute delay between refresh cycles.
-- COSY BARO measurement freshness monitoring.
-- DHT22 last-known-good measurement fallback.
+- COSY BARO measurement freshness monitoring with a 15-minute threshold.
+- Last-known-good measurement fallback for both COSY BARO and DHT22, with a 24-hour cache expiry.
 - Error logging and a 120-second timeout for each display refresh.
 - systemd-managed background operation.
 - PNG preview mode for checking the display layout without updating the e-paper panel.
@@ -33,7 +33,7 @@ The system uses two Raspberry Pi devices for COSY BARO reception and display, pl
 - Retrieves DHT22 measurements from a separate HTTPS API.
 - Renders measurements and system information on the Waveshare 4.2-inch e-paper display.
 - Checks COSY BARO measurement freshness using the source timestamp.
-- Stores the last successfully retrieved DHT22 values for fallback use.
+- Stores the last valid COSY BARO and DHT22 measurements for fallback use.
 - Runs continuously through a systemd-managed refresh loop.
 
 ## Data flow
@@ -78,14 +78,19 @@ The Zero W also reads local system information for the display node section.
 
 ## Software structure
 
-```text
+```
 raspberry-pi-zero-weather-dashboard/
 ├── .gitignore
 ├── README.md
-└── src/
-    ├── dashboard_loop.py
-    ├── epaper_dashboard.py
-    └── weather_dashboard.py
+├── config.example.json
+├── config.local.json          # Local only, ignored by Git
+├── src/
+│   ├── dashboard_config.py
+│   ├── dashboard_loop.py
+│   ├── epaper_dashboard.py
+│   └── weather_dashboard.py
+└── tests/
+    └── test_dashboard.py
 ```
 
 ### `src/epaper_dashboard.py`
@@ -128,13 +133,21 @@ The dashboard uses the `received_at` timestamp provided by the Raspberry Pi 4 AP
 
 | Status | Meaning |
 |---|---|
-| `ONLINE` | The API responds successfully and the measurement is less than 15 minutes old. |
-| `STALE` | The API responds, but the measurement is at least 15 minutes old or has an invalid timezone/future timestamp. |
-| `OFFLINE` | The API request fails or the returned measurement is invalid. |
+| `ONLINE` | The API returns a valid measurement less than 15 minutes old. |
+| `STALE` | A valid measurement is available but is at least 15 minutes old, or the API request failed and a valid cached measurement is available. |
+| `OFFLINE` | No valid measurement is available from the API or local cache. |
 
-When the measurement is stale, the last values returned by the API remain visible alongside the `STALE` indicator.
+The latest valid COSY BARO measurement is stored locally as a last-known-good cache.
 
-If the API request fails, the current implementation displays unavailable values instead of a locally cached COSY BARO measurement.
+Cached measurements must be less than 24 hours old, contain finite numeric temperature, humidity, and pressure values, have humidity between 0 and 100 percent, and include a timezone-aware timestamp.
+
+The original sensor reception timestamp is preserved when caching measurements. Cache age is calculated from this timestamp rather than from the time the cache file was written.
+
+If the API becomes unavailable, the dashboard displays cached values with the `STALE` indicator. If the cache is missing, invalid, or at least 24 hours old, the dashboard displays `OFFLINE` and unavailable values.
+
+API measurements at least 24 hours old are also rejected, even if the API request itself succeeds.
+
+The COSY BARO cache location is configured using `cosy_baro_cache_path` in `config.local.json`.
 
 ### DHT22 — Living room
 
@@ -169,7 +182,7 @@ Example response:
 ```json
 {
   "sensor": "TFA COSY BARO",
-  "id": "183625388a34",
+  "id": "example-sensor-id",
   "temperature_c": 23.9,
   "humidity_percent": 53,
   "pressure_hpa": 1020.6,
@@ -279,6 +292,7 @@ Implemented functionality includes:
 - Refresh timeout and error logging.
 - systemd-managed background execution.
 - PNG preview generation.
+- COSY BARO last-known-good fallback with 24-hour expiry.
 
 Potential future improvements include more comprehensive API failure recovery, additional automated tests, configuration management, and expanded deployment documentation.
 
@@ -290,17 +304,20 @@ This repository contains the separate Raspberry Pi Zero W dashboard application,
 
 ## Local configuration
 
-The dashboard reads deployment-specific settings from
-`config.local.json` in the repository root.
+The dashboard reads deployment-specific settings from `config.local.json` in the repository root.
 
 Copy `config.example.json` to `config.local.json` and configure:
 
 - `cosy_baro_url`: COSY BARO receiver API endpoint
+- `cosy_baro_cache_path`: local cache for the last valid COSY BARO measurement
 - `dht22_url`: DHT22 sensor API endpoint
-- `dht22_cache_path`: local cache for the last valid DHT22 reading
+- `dht22_cache_path`: local cache for the last valid DHT22 measurement
 - `waveshare_lib_path`: Waveshare Python driver library directory
+
+All five configuration values are required.
 
 `config.local.json` is excluded from Git and must not be committed.
 
-The configuration file must be present on the Raspberry Pi Zero W
-before starting the dashboard service.
+The configuration file must be present on the Raspberry Pi Zero W before starting the dashboard service.
+
+When upgrading from an earlier version, add `cosy_baro_cache_path` to the existing local configuration before deploying the updated dashboard code.

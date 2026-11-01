@@ -1,6 +1,8 @@
+import json
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -12,6 +14,7 @@ sys.path.insert(0, str(ROOT / "src"))
 # Supply example configuration values for isolated tests.
 with patch("dashboard_config.load_config", return_value={
     "cosy_baro_url": "http://192.0.2.10:8765/api/cosy-baro",
+    "cosy_baro_cache_path": "/tmp/cosy-baro-test.json",
     "dht22_url": "https://sensor.example.com/api/lab_temp",
     "dht22_cache_path": "/tmp/dht22-test.json",
     "waveshare_lib_path": "/tmp/waveshare",
@@ -177,6 +180,208 @@ class DHT22FallbackTests(unittest.TestCase):
 
         self.assertFalse(api_ok)
         self.assertIsNone(data)
+
+
+class CosyBaroCacheTests(unittest.TestCase):
+
+    def valid_data(self, updated):
+        return {
+            "temperature": 22.5,
+            "humidity": 45.0,
+            "pressure": 1013.2,
+            "updated": updated,
+        }
+
+    def check_cache(self, data):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "cosy-cache.json"
+
+            with patch.object(dashboard, "COSY_BARO_STATE_FILE", path):
+                dashboard.save_cosy_baro_cache(data)
+                return dashboard.load_cosy_baro_cache()
+
+    def test_valid_cache_is_loaded(self):
+        data = self.valid_data(
+            datetime.now(timezone.utc) - timedelta(minutes=5)
+        )
+
+        self.assertEqual(self.check_cache(data), data)
+
+    def test_cache_23_hours_old_is_valid(self):
+        data = self.valid_data(
+            datetime.now(timezone.utc) - timedelta(hours=23)
+        )
+
+        self.assertEqual(self.check_cache(data), data)
+
+    def test_cache_25_hours_old_is_rejected(self):
+        data = self.valid_data(
+            datetime.now(timezone.utc) - timedelta(hours=25)
+        )
+
+        self.assertIsNone(self.check_cache(data))
+
+    def test_future_timestamp_is_rejected(self):
+        data = self.valid_data(
+            datetime.now(timezone.utc) + timedelta(hours=1)
+        )
+
+        self.assertIsNone(self.check_cache(data))
+
+    def test_timestamp_without_timezone_is_rejected(self):
+        data = self.valid_data(datetime.now())
+
+        self.assertIsNone(self.check_cache(data))
+
+    def test_invalid_humidity_is_rejected(self):
+        data = self.valid_data(datetime.now(timezone.utc))
+        data["humidity"] = 150
+
+        self.assertIsNone(self.check_cache(data))
+
+    def test_non_finite_pressure_is_rejected(self):
+        data = self.valid_data(datetime.now(timezone.utc))
+        data["pressure"] = float("nan")
+
+        self.assertIsNone(self.check_cache(data))
+
+    def test_missing_cache_returns_none(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "missing.json"
+
+            with patch.object(dashboard, "COSY_BARO_STATE_FILE", path):
+                self.assertIsNone(dashboard.load_cosy_baro_cache())
+
+    def test_corrupted_cache_returns_none(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "corrupted.json"
+            path.write_text("{invalid json", encoding="utf-8")
+
+            with patch.object(dashboard, "COSY_BARO_STATE_FILE", path):
+                self.assertIsNone(dashboard.load_cosy_baro_cache())
+
+
+class CosyBaroFallbackTests(unittest.TestCase):
+
+    def test_failed_api_uses_valid_cache(self):
+        cached = {
+            "temperature": 22.5,
+            "humidity": 45.0,
+            "pressure": 1013.2,
+            "updated": datetime.now(timezone.utc)
+            - timedelta(minutes=5),
+        }
+
+        with patch.object(
+            dashboard,
+            "load_cosy_baro_cache",
+            return_value=cached,
+        ):
+            with patch.object(
+                dashboard,
+                "urlopen",
+                side_effect=OSError("Test connection failure"),
+            ):
+                data, api_ok = dashboard.fetch_cosy_baro()
+
+        self.assertFalse(api_ok)
+        self.assertEqual(data, cached)
+        self.assertEqual(
+            dashboard.cosy_baro_status(data, api_ok),
+            "STALE",
+        )
+
+    def test_failed_api_without_cache_is_offline(self):
+        with patch.object(
+            dashboard,
+            "load_cosy_baro_cache",
+            return_value=None,
+        ):
+            with patch.object(
+                dashboard,
+                "urlopen",
+                side_effect=OSError("Test connection failure"),
+            ):
+                data, api_ok = dashboard.fetch_cosy_baro()
+
+        self.assertFalse(api_ok)
+        self.assertIsNone(data)
+        self.assertEqual(
+            dashboard.cosy_baro_status(data, api_ok),
+            "OFFLINE",
+        )
+
+
+class CosyBaroAPISuccessTests(unittest.TestCase):
+
+    def test_successful_api_response_updates_cache(self):
+        updated = datetime.now(timezone.utc) - timedelta(minutes=2)
+
+        payload = {
+            "temperature_c": 22.5,
+            "humidity_percent": 45.0,
+            "pressure_hpa": 1013.2,
+            "received_at": updated.isoformat(),
+        }
+
+        with TemporaryDirectory() as directory:
+            cache_path = Path(directory) / "cosy-cache.json"
+
+            with patch.object(
+                dashboard,
+                "COSY_BARO_STATE_FILE",
+                cache_path,
+            ):
+                with patch.object(
+                    dashboard,
+                    "urlopen",
+                    return_value=StringIO(json.dumps(payload)),
+                ):
+                    data, api_ok = dashboard.fetch_cosy_baro()
+
+                cached = dashboard.load_cosy_baro_cache()
+
+        self.assertTrue(api_ok)
+        self.assertEqual(data, cached)
+        self.assertEqual(
+            dashboard.cosy_baro_status(data, api_ok),
+            "ONLINE",
+        )
+
+    def test_expired_api_measurement_is_not_cached(self):
+        updated = datetime.now(timezone.utc) - timedelta(hours=25)
+
+        payload = {
+            "temperature_c": 22.5,
+            "humidity_percent": 45.0,
+            "pressure_hpa": 1013.2,
+            "received_at": updated.isoformat(),
+        }
+
+        with TemporaryDirectory() as directory:
+            cache_path = Path(directory) / "cosy-cache.json"
+
+            with patch.object(
+                dashboard,
+                "COSY_BARO_STATE_FILE",
+                cache_path,
+            ):
+                with patch.object(
+                    dashboard,
+                    "urlopen",
+                    return_value=StringIO(json.dumps(payload)),
+                ):
+                    data, api_ok = dashboard.fetch_cosy_baro()
+
+                cache_exists = cache_path.exists()
+
+        self.assertFalse(api_ok)
+        self.assertIsNone(data)
+        self.assertFalse(cache_exists)
+        self.assertEqual(
+            dashboard.cosy_baro_status(data, api_ok),
+            "OFFLINE",
+        )
 
 
 if __name__ == "__main__":

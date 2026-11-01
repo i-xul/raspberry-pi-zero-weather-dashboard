@@ -18,6 +18,7 @@ def load_config():
 
     required = (
         "cosy_baro_url",
+        "cosy_baro_cache_path",
         "dht22_url",
         "dht22_cache_path",
         "waveshare_lib_path",

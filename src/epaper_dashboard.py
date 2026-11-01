@@ -21,6 +21,8 @@ from dashboard_config import load_config
 
 CONFIG = load_config()
 COSY_BARO_URL = CONFIG["cosy_baro_url"]
+COSY_BARO_STATE_FILE = Path(CONFIG["cosy_baro_cache_path"])
+
 DHT22_URL = CONFIG["dht22_url"]
 
 DHT22_STATE_FILE = Path(
@@ -30,6 +32,7 @@ DHT22_STATE_FILE = Path(
 FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 COSY_BARO_STALE_AFTER = timedelta(minutes=15)
+COSY_BARO_CACHE_MAX_AGE = timedelta(hours=24)
 DHT22_CACHE_MAX_AGE = timedelta(hours=24)
 
 DISPLAY_WIDTH = 400
@@ -143,7 +146,83 @@ def fetch_dht22():
         return last_good, False
 
 
+def load_cosy_baro_cache():
+    """Load a valid COSY BARO measurement younger than 24 hours."""
+    try:
+        data = json.loads(
+            COSY_BARO_STATE_FILE.read_text(encoding="utf-8")
+        )
+
+        if not isinstance(data, dict):
+            return None
+
+        temperature = float(data["temperature"])
+        humidity = float(data["humidity"])
+        pressure = float(data["pressure"])
+        updated = datetime.fromisoformat(data["updated"])
+
+        if not all(
+            math.isfinite(value)
+            for value in (temperature, humidity, pressure)
+        ):
+            return None
+
+        if not 0 <= humidity <= 100:
+            return None
+
+        if updated.tzinfo is None or updated.utcoffset() is None:
+            return None
+
+        age = (
+            datetime.now(timezone.utc)
+            - updated.astimezone(timezone.utc)
+        )
+
+        if not timedelta(0) <= age < COSY_BARO_CACHE_MAX_AGE:
+            return None
+
+        return {
+            "temperature": temperature,
+            "humidity": humidity,
+            "pressure": pressure,
+            "updated": updated,
+        }
+
+    except (OSError, ValueError, TypeError, KeyError, OverflowError):
+        return None
+
+
+def save_cosy_baro_cache(data):
+    """Atomically save the latest valid COSY BARO measurement."""
+    temp_path = COSY_BARO_STATE_FILE.with_suffix(".tmp")
+
+    try:
+        payload = {
+            "temperature": data["temperature"],
+            "humidity": data["humidity"],
+            "pressure": data["pressure"],
+            "updated": data["updated"].isoformat(),
+        }
+
+        temp_path.write_text(
+            json.dumps(payload),
+            encoding="utf-8",
+        )
+
+        os.replace(temp_path, COSY_BARO_STATE_FILE)
+
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        logging.warning("Could not save COSY BARO cache: %s", exc)
+
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def fetch_cosy_baro():
+    cached = load_cosy_baro_cache()
+
     try:
         with urlopen(COSY_BARO_URL, timeout=10) as response:
             payload = json.load(response)
@@ -162,21 +241,44 @@ def fetch_cosy_baro():
         if not 0 <= humidity <= 100:
             raise ValueError("Humidity out of range")
 
-        return {
+        if updated.tzinfo is None or updated.utcoffset() is None:
+            raise ValueError("COSY BARO timestamp has no timezone")
+
+        age = (
+            datetime.now(timezone.utc)
+            - updated.astimezone(timezone.utc)
+        )
+
+        if age < timedelta(0):
+            raise ValueError("COSY BARO timestamp is in the future")
+
+        data = {
             "temperature": temperature,
             "humidity": humidity,
             "pressure": pressure,
             "updated": updated,
-        }, True
+        }
+
+        if age < COSY_BARO_CACHE_MAX_AGE:
+            save_cosy_baro_cache(data)
+            return data, True
+
+        logging.warning(
+            "COSY BARO measurement exceeds 24-hour retention limit"
+        )
+        return cached, False
 
     except (OSError, ValueError, KeyError, TypeError) as exc:
         logging.warning("COSY BARO request failed: %s", exc)
-        return None, False
+        return cached, False
 
 
 def cosy_baro_status(cosy, api_ok):
-    if not api_ok or not cosy:
+    if not cosy:
         return "OFFLINE"
+
+    if not api_ok:
+        return "STALE"
 
     updated = cosy["updated"]
 
@@ -184,7 +286,10 @@ def cosy_baro_status(cosy, api_ok):
         logging.warning("COSY BARO timestamp has no timezone")
         return "STALE"
 
-    age = datetime.now(timezone.utc) - updated.astimezone(timezone.utc)
+    age = (
+        datetime.now(timezone.utc)
+        - updated.astimezone(timezone.utc)
+    )
 
     if age < timedelta(0):
         logging.warning("COSY BARO timestamp is in the future")
