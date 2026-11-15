@@ -6,6 +6,7 @@ from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+from unittest.mock import MagicMock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -381,6 +382,68 @@ class CosyBaroAPISuccessTests(unittest.TestCase):
         self.assertEqual(
             dashboard.cosy_baro_status(data, api_ok),
             "OFFLINE",
+        )
+
+
+class EpaperUpdateTests(unittest.TestCase):
+    def setUp(self):
+        self.epd = MagicMock()
+        self.image = object()
+        self.epd.getbuffer.return_value = "test-buffer"
+
+    def test_successful_update(self):
+        dashboard.update_epaper(self.epd, self.image)
+
+        self.epd.init.assert_called_once_with()
+        self.epd.getbuffer.assert_called_once_with(self.image)
+        self.epd.display.assert_called_once_with("test-buffer")
+        self.epd.sleep.assert_called_once_with()
+
+    def test_init_failure_still_attempts_sleep(self):
+        self.epd.init.side_effect = RuntimeError("Initialization failed")
+
+        with self.assertRaisesRegex(RuntimeError, "Initialization failed"):
+            dashboard.update_epaper(self.epd, self.image)
+
+        self.epd.display.assert_not_called()
+        self.epd.sleep.assert_called_once_with()
+
+    def test_display_failure_still_attempts_sleep(self):
+        self.epd.display.side_effect = RuntimeError("Display failed")
+
+        with self.assertRaisesRegex(RuntimeError, "Display failed"):
+            dashboard.update_epaper(self.epd, self.image)
+
+        self.epd.sleep.assert_called_once_with()
+
+    def test_sleep_failure_is_propagated(self):
+        self.epd.sleep.side_effect = RuntimeError("Sleep failed")
+
+        with self.assertLogs(level="ERROR") as logs:
+            with self.assertRaisesRegex(RuntimeError, "Sleep failed"):
+                dashboard.update_epaper(self.epd, self.image)
+
+        self.assertTrue(
+            any(
+                "Failed to put e-paper display to sleep" in message
+                for message in logs.output
+            )
+        )
+
+    def test_original_error_is_preserved_if_sleep_also_fails(self):
+        self.epd.display.side_effect = RuntimeError("Display failed")
+        self.epd.sleep.side_effect = RuntimeError("Sleep failed")
+
+        with self.assertLogs(level="ERROR") as logs:
+            with self.assertRaisesRegex(RuntimeError, "Display failed"):
+                dashboard.update_epaper(self.epd, self.image)
+
+        self.epd.sleep.assert_called_once_with()
+        self.assertTrue(
+            any(
+                "Failed to put e-paper display to sleep" in message
+                for message in logs.output
+            )
         )
 
 

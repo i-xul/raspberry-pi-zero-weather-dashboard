@@ -426,6 +426,25 @@ def render_dashboard():
     return image
 
 
+def update_epaper(epd, image):
+    """Update the e-paper display and attempt cleanup on failure."""
+    update_failed = False
+
+    try:
+        epd.init()
+        epd.display(epd.getbuffer(image))
+    except BaseException:
+        update_failed = True
+        raise
+    finally:
+        try:
+            epd.sleep()
+        except Exception:
+            logging.exception("Failed to put e-paper display to sleep")
+            if not update_failed:
+                raise
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -448,9 +467,7 @@ def main():
     from waveshare_epd import epd4in2
 
     epd = epd4in2.EPD()
-    epd.init()
-    epd.display(epd.getbuffer(image))
-    epd.sleep()
+    update_epaper(epd, image)
 
 
 if __name__ == "__main__":
