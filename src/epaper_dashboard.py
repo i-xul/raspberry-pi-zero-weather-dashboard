@@ -18,10 +18,16 @@ import requests
 from PIL import Image, ImageDraw, ImageFont
 
 from dashboard_config import load_config
+from pressure_history import calculate_trend, save_measurement
 
 CONFIG = load_config()
 COSY_BARO_URL = CONFIG["cosy_baro_url"]
 COSY_BARO_STATE_FILE = Path(CONFIG["cosy_baro_cache_path"])
+PRESSURE_HISTORY_FILE = (
+    Path(__file__).resolve().parent.parent
+    / "data"
+    / "pressure_history.json"
+)
 
 DHT22_URL = CONFIG["dht22_url"]
 
@@ -316,6 +322,17 @@ def draw_box(draw, xy, title, lines, font, title_font):
 
 def render_dashboard():
     cosy, cosy_ok = fetch_cosy_baro()
+    pressure_trend = None
+
+    if cosy and cosy_ok:
+        history = save_measurement(
+            PRESSURE_HISTORY_FILE,
+            cosy["pressure"],
+            cosy["updated"],
+        )
+
+        if cosy_baro_status(cosy, cosy_ok) == "ONLINE":
+            pressure_trend = calculate_trend(history)
     sensor, sensor_ok = fetch_dht22()
     load1, load5, _ = os.getloadavg()
 
@@ -390,6 +407,29 @@ def render_dashboard():
     draw.text((18, 145), temperature, font=title_font, fill=0)
     draw.text((155, 145), humidity, font=title_font, fill=0)
     draw.text((280, 145), pressure, font=title_font, fill=0)
+
+    trend_arrows = {
+        "rising": "↗",
+        "steady": "→",
+        "falling": "↘",
+    }
+
+    if pressure_trend in trend_arrows:
+        pressure_width = draw.textbbox(
+            (0, 0),
+            pressure,
+            font=title_font,
+        )[2]
+
+        arrow_x = 280 + pressure_width + 5
+
+        if arrow_x + 15 <= 388:
+            draw.text(
+                (arrow_x, 145),
+                trend_arrows[pressure_trend],
+                font=title_font,
+                fill=0,
+            )
 
     # OLOHUONE / DHT22: original rendering, only title changed.
     draw.rectangle((10, 190, 390, 295), outline=0)
